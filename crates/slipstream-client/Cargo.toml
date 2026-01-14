@@ -2,6 +2,10 @@
 name = "slipstream-client"
 version = "0.1.0"
 edition = "2021"
+description = "Slipstream DNS tunnel client CLI"
+license = "Apache-2.0"
+repository = "https://github.com/Mygod/slipstream-rust"
+readme = "../../README.md"
 
 [dependencies]
 clap = { workspace = true }
@@ -10,3 +14,5 @@ slipstream-core = { path = "../slipstream-core" }
 slipstream-dns = { path = "../slipstream-dns" }
 slipstream-ffi = { path = "../slipstream-ffi" }
 tokio = { version = "1.37", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

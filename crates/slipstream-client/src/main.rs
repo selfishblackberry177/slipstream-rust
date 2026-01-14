@@ -1,9 +1,10 @@
 mod client;
 
 use clap::Parser;
-use slipstream_core::{normalize_domain, parse_resolver_addresses};
+use slipstream_core::{normalize_domain, parse_host_port, AddressKind, HostPort};
 use slipstream_ffi::ClientConfig;
 use tokio::runtime::Builder;
+use tracing_subscriber::EnvFilter;
 
 use client::run_client;
 
@@ -15,8 +16,8 @@ use client::run_client;
 struct Args {
     #[arg(long = "tcp-listen-port", short = 'l', default_value_t = 5201)]
     tcp_listen_port: u16,
-    #[arg(long = "resolver", short = 'r', action = clap::ArgAction::Append)]
-    resolver: Vec<String>,
+    #[arg(long = "resolver", short = 'r', value_parser = parse_resolver, required = true)]
+    resolver: Vec<HostPort>,
     #[arg(
         long = "congestion-control",
         short = 'c',
@@ -33,8 +34,8 @@ struct Args {
         default_missing_value = "true"
     )]
     gso: bool,
-    #[arg(long = "domain", short = 'd')]
-    domain: Option<String>,
+    #[arg(long = "domain", short = 'd', value_parser = parse_domain)]
+    domain: String,
     #[arg(long = "keep-alive-interval", short = 't', default_value_t = 400)]
     keep_alive_interval: u16,
     #[arg(long = "debug-poll")]
@@ -44,36 +45,8 @@ struct Args {
 }
 
 fn main() {
+    init_logging();
     let args = Args::parse();
-
-    let domain = match args.domain {
-        Some(domain) if !domain.trim().is_empty() => domain,
-        _ => {
-            eprintln!("Client error: Missing required --domain option");
-            std::process::exit(1);
-        }
-    };
-
-    if args.resolver.is_empty() {
-        eprintln!("Client error: Missing required --resolver option (at least one required)");
-        std::process::exit(1);
-    }
-
-    let domain = match normalize_domain(&domain) {
-        Ok(domain) => domain,
-        Err(err) => {
-            eprintln!("Client error: {}", err);
-            std::process::exit(1);
-        }
-    };
-
-    let resolver_addresses = match parse_resolver_addresses(&args.resolver) {
-        Ok(addrs) => addrs,
-        Err(err) => {
-            eprintln!("{}", err);
-            std::process::exit(1);
-        }
-    };
 
     let congestion_control = args.congestion_control.unwrap_or_else(|| {
         if args.authoritative {
@@ -85,11 +58,11 @@ fn main() {
 
     let config = ClientConfig {
         tcp_listen_port: args.tcp_listen_port,
-        resolvers: &resolver_addresses,
+        resolvers: &args.resolver,
         congestion_control: &congestion_control,
         authoritative: args.authoritative,
         gso: args.gso,
-        domain: &domain,
+        domain: &args.domain,
         keep_alive_interval: args.keep_alive_interval as usize,
         debug_poll: args.debug_poll,
         debug_streams: args.debug_streams,
@@ -103,8 +76,25 @@ fn main() {
     match runtime.block_on(run_client(&config)) {
         Ok(code) => std::process::exit(code),
         Err(err) => {
-            eprintln!("{}", err);
+            tracing::error!("Client error: {}", err);
             std::process::exit(1);
         }
     }
+}
+
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .without_time()
+        .try_init();
+}
+
+fn parse_domain(input: &str) -> Result<String, String> {
+    normalize_domain(input).map_err(|err| err.to_string())
+}
+
+fn parse_resolver(input: &str) -> Result<HostPort, String> {
+    parse_host_port(input, 53, AddressKind::Resolver).map_err(|err| err.to_string())
 }

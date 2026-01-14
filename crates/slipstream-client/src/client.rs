@@ -34,7 +34,9 @@ use tokio::net::{
 };
 use tokio::sync::{mpsc, Notify};
 use tokio::time::sleep;
+use tracing::{debug, info, warn};
 
+// Protocol defaults; see docs/config.md for details.
 const SLIPSTREAM_ALPN: &str = "picoquic_sample";
 const SLIPSTREAM_SNI: &str = "test.example.com";
 const DNS_WAKE_DELAY_MAX_US: i64 = 10_000_000;
@@ -258,7 +260,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
         .await
         .map_err(map_io)?;
     spawn_acceptor(listener, command_tx.clone());
-    eprintln!("Listening on TCP port {}", config.tcp_listen_port);
+    info!("Listening on TCP port {}", config.tcp_listen_port);
 
     let alpn = CString::new(SLIPSTREAM_ALPN)
         .map_err(|_| ClientError::new("ALPN contains an unexpected null byte"))?;
@@ -344,7 +346,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
     }
 
     if config.gso {
-        eprintln!("Warning: GSO is not implemented in the Rust client loop yet.");
+        warn!("GSO is not implemented in the Rust client loop yet.");
     }
 
     let mut dns_id = 1u16;
@@ -557,7 +559,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
             if poll_deficit > 0 && debug.enabled {
                 let (cwnd, in_transit, rtt) =
                     unsafe { (get_cwin(cnx), get_bytes_in_transit(cnx), get_rtt(cnx)) };
-                eprintln!(
+                debug!(
                     "cc_state: cwnd={} in_transit={} rtt_us={} flow_blocked={} deficit={}",
                     cwnd, in_transit, rtt, flow_blocked, poll_deficit
                 );
@@ -646,7 +648,7 @@ unsafe extern "C" fn client_callback(
                     slipstream_disable_ack_delay(cnx);
                 }
             }
-            eprintln!("Connection ready");
+            info!("Connection ready");
         }
         picoquic_call_back_event_t::picoquic_callback_stream_data
         | picoquic_call_back_event_t::picoquic_callback_stream_fin => {
@@ -669,7 +671,7 @@ unsafe extern "C" fn client_callback(
                 _ => "unknown",
             };
             if let Some(stream) = state.streams.remove(&stream_id) {
-                eprintln!(
+                warn!(
                     "stream {}: reset event={} rx_bytes={} tx_bytes={} queued={} consumed_offset={} fin_offset={:?} fin_enqueued={}",
                     stream_id,
                     reason,
@@ -681,7 +683,7 @@ unsafe extern "C" fn client_callback(
                     stream.fin_enqueued
                 );
             } else {
-                eprintln!(
+                warn!(
                     "stream {}: reset event={} (unknown stream)",
                     stream_id, reason
                 );
@@ -692,7 +694,7 @@ unsafe extern "C" fn client_callback(
         | picoquic_call_back_event_t::picoquic_callback_application_close
         | picoquic_call_back_event_t::picoquic_callback_stateless_reset => {
             state.closing = true;
-            eprintln!("Connection closed");
+            info!("Connection closed");
         }
         picoquic_call_back_event_t::picoquic_callback_prepare_to_send => {
             if !bytes.is_null() {
@@ -718,7 +720,7 @@ fn handle_stream_data(
 
     {
         let Some(stream) = state.streams.get_mut(&stream_id) else {
-            eprintln!(
+            warn!(
                 "stream {}: data for unknown stream len={} fin={}",
                 stream_id,
                 data.len(),
@@ -738,7 +740,7 @@ fn handle_stream_data(
                 .send(StreamWrite::Data(data.to_vec()))
                 .is_err()
             {
-                eprintln!(
+                warn!(
                     "stream {}: tcp write channel closed queued={} rx_bytes={} tx_bytes={}",
                     stream_id, stream.queued_bytes, stream.rx_bytes, stream.tx_bytes
                 );
@@ -755,7 +757,7 @@ fn handle_stream_data(
             stream.data_rx = None;
             if !stream.fin_enqueued {
                 if stream.write_tx.send(StreamWrite::Fin).is_err() {
-                    eprintln!(
+                    warn!(
                         "stream {}: tcp write channel closed on fin queued={} rx_bytes={} tx_bytes={}",
                         stream_id,
                         stream.queued_bytes,
@@ -776,7 +778,7 @@ fn handle_stream_data(
 
     if reset_stream {
         if debug_streams {
-            eprintln!("stream {}: resetting", stream_id);
+            debug!("stream {}: resetting", stream_id);
         }
         unsafe {
             let _ = picoquic_reset_stream(cnx, stream_id, SLIPSTREAM_FILE_CANCEL_ERROR);
@@ -784,7 +786,7 @@ fn handle_stream_data(
         state.streams.remove(&stream_id);
     } else if remove_stream {
         if debug_streams {
-            eprintln!("stream {}: finished", stream_id);
+            debug!("stream {}: finished", stream_id);
         }
         state.streams.remove(&stream_id);
     }
@@ -978,16 +980,16 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
             );
             let _ = unsafe { picoquic_mark_active_stream(cnx, stream_id, 1, std::ptr::null_mut()) };
             if state.debug_streams {
-                eprintln!("stream {}: accepted", stream_id);
+                debug!("stream {}: accepted", stream_id);
             } else {
-                eprintln!("Accepted TCP stream {}", stream_id);
+                info!("Accepted TCP stream {}", stream_id);
             }
         }
         Command::StreamData { stream_id, data } => {
             let ret =
                 unsafe { picoquic_add_to_stream(cnx, stream_id, data.as_ptr(), data.len(), 0) };
             if ret < 0 {
-                eprintln!(
+                warn!(
                     "stream {}: add_to_stream failed ret={} chunk_len={}",
                     stream_id,
                     ret,
@@ -1006,7 +1008,7 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
         Command::StreamClosed { stream_id } => {
             let ret = unsafe { picoquic_add_to_stream(cnx, stream_id, std::ptr::null(), 0, 1) };
             if ret < 0 {
-                eprintln!(
+                warn!(
                     "stream {}: add_to_stream(fin) failed ret={}",
                     stream_id, ret
                 );
@@ -1014,7 +1016,7 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
         }
         Command::StreamReadError { stream_id } => {
             if let Some(stream) = state.streams.remove(&stream_id) {
-                eprintln!(
+                warn!(
                     "stream {}: tcp read error rx_bytes={} tx_bytes={} queued={} consumed_offset={} fin_offset={:?}",
                     stream_id,
                     stream.rx_bytes,
@@ -1024,13 +1026,13 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
                     stream.fin_offset
                 );
             } else {
-                eprintln!("stream {}: tcp read error (unknown stream)", stream_id);
+                warn!("stream {}: tcp read error (unknown stream)", stream_id);
             }
             let _ = unsafe { picoquic_reset_stream(cnx, stream_id, SLIPSTREAM_INTERNAL_ERROR) };
         }
         Command::StreamWriteError { stream_id } => {
             if let Some(stream) = state.streams.remove(&stream_id) {
-                eprintln!(
+                warn!(
                     "stream {}: tcp write error rx_bytes={} tx_bytes={} queued={} consumed_offset={} fin_offset={:?}",
                     stream_id,
                     stream.rx_bytes,
@@ -1040,7 +1042,7 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
                     stream.fin_offset
                 );
             } else {
-                eprintln!("stream {}: tcp write error (unknown stream)", stream_id);
+                warn!("stream {}: tcp write error (unknown stream)", stream_id);
             }
             let _ = unsafe { picoquic_reset_stream(cnx, stream_id, SLIPSTREAM_INTERNAL_ERROR) };
         }
@@ -1059,7 +1061,7 @@ fn handle_command(cnx: *mut picoquic_cnx_t, state_ptr: *mut ClientState, command
                     picoquic_stream_data_consumed(cnx, stream_id, stream.consumed_offset)
                 };
                 if ret < 0 {
-                    eprintln!(
+                    warn!(
                         "stream {}: stream_data_consumed failed ret={} consumed_offset={}",
                         stream_id, ret, stream.consumed_offset
                     );
@@ -1349,7 +1351,7 @@ fn maybe_report_debug(
     } else {
         String::new()
     };
-    eprintln!(
+    debug!(
         "debug: dns+={} send_pkts+={} send_bytes+={} polls+={} zero_send+={} zero_send_streams+={} streams={} enqueued+={} last_enqueue_ms={} pending_polls={} inflight_polls={}{}",
         dns_delta,
         send_pkt_delta,
@@ -1407,13 +1409,13 @@ fn add_paths(cnx: *mut picoquic_cnx_t, resolvers: &mut [ResolverAddr]) -> Result
         };
         if ret == 0 && path_id >= 0 {
             resolver.added = true;
-            eprintln!("Added path {}", resolver.addr);
+            info!("Added path {}", resolver.addr);
             continue;
         }
         resolver.probe_attempts = resolver.probe_attempts.saturating_add(1);
         let delay = path_probe_backoff(resolver.probe_attempts);
         resolver.next_probe_at = now.saturating_add(delay);
-        eprintln!(
+        warn!(
             "Failed adding path {} (attempt {}), retrying in {}ms",
             resolver.addr,
             resolver.probe_attempts,

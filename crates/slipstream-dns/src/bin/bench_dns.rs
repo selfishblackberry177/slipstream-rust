@@ -4,8 +4,11 @@ use slipstream_dns::{
 };
 use std::env;
 use std::time::Instant;
+use tracing::{error, warn};
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    init_logging();
     let mut iterations = 10_000usize;
     let mut payload_len = 256usize;
     let mut domain = "test.com".to_string();
@@ -26,16 +29,16 @@ fn main() {
     let max_payload = match max_payload_len_for_domain(&domain) {
         Ok(limit) => limit,
         Err(err) => {
-            eprintln!("Invalid domain: {}", err);
+            error!("Invalid domain: {}", err);
             std::process::exit(1);
         }
     };
     if max_payload == 0 {
-        eprintln!("Domain leaves no room for payload labels.");
+        error!("Domain leaves no room for payload labels.");
         std::process::exit(1);
     }
     if payload_len > max_payload {
-        eprintln!(
+        warn!(
             "Payload length {} exceeds max {} for domain {}; clamping.",
             payload_len, max_payload, domain
         );
@@ -46,7 +49,7 @@ fn main() {
     let qname = match build_qname(&payload, &domain) {
         Ok(name) => name,
         Err(err) => {
-            eprintln!("Failed to build qname: {}", err);
+            error!("Failed to build qname: {}", err);
             std::process::exit(1);
         }
     };
@@ -119,4 +122,13 @@ fn bench(label: &str, iterations: usize, bytes_per_iter: usize, mut f: impl FnMu
 
 fn print_usage() {
     println!("Usage: bench_dns [--iterations=N] [--payload-len=N] [--domain=NAME]");
+}
+
+fn init_logging() {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .without_time()
+        .try_init();
 }

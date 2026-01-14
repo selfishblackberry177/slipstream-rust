@@ -8,6 +8,23 @@ This page documents runtime knobs and environment variables.
   Overrides the connection-level QUIC max_data limit used for backpressure.
   Default is 8 MiB. Values must be positive integers.
 
+## Logging and debug knobs
+
+- Logging uses `tracing` with `RUST_LOG` (default `info`). Example:
+  `RUST_LOG=debug cargo run -p slipstream-client -- --resolver=IP:PORT --domain=example.com`.
+- `--debug-poll` (client) enables periodic poll/pacing metrics.
+- `--debug-streams` (client/server) logs stream lifecycle details.
+- `--debug-commands` (server) reports command counts once per second.
+
+## Protocol defaults
+
+- Client ALPN: `picoquic_sample` (must match server ALPN).
+- Client SNI: `test.example.com`.
+- Server ALPN: `picoquic_sample`.
+- Server QUIC MTU: `900`.
+  Update `crates/slipstream-client/src/client.rs` and `crates/slipstream-server/src/server.rs`
+  together to keep client/server ALPN in sync.
+
 ## picoquic build environment
 
 These affect the build script in crates/slipstream-ffi:

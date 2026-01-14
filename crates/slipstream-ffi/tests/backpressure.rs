@@ -42,7 +42,9 @@ fn configures_connection_level_backpressure() {
     );
 
     let alpn = CString::new("test").expect("ALPN should be valid");
+    // SAFETY: picoquic_current_time has no pointer inputs.
     let now = unsafe { picoquic_current_time() };
+    // SAFETY: picoquic_create accepts null for optional pointers and uses a valid ALPN C string.
     let quic = unsafe {
         picoquic_create(
             1,
@@ -66,10 +68,12 @@ fn configures_connection_level_backpressure() {
     let _guard = QuicGuard::new(quic);
 
     let cc_algo = CString::new("dcubic").expect("congestion control should be valid");
+    // SAFETY: quic is a valid picoquic context and cc_algo is a valid C string.
     unsafe {
         configure_quic(quic, cc_algo.as_ptr(), 1200);
     }
 
+    // SAFETY: test helpers require a valid picoquic context.
     let max_data = unsafe { slipstream_test_get_max_data_limit(quic) };
     let defer = unsafe { slipstream_test_get_defer_stream_data_consumption(quic) };
     assert_eq!(

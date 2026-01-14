@@ -29,10 +29,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream as TokioTcpStream, UdpSocket as TokioUdpSocket};
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
+use tracing::{debug, error, warn};
 
+// Protocol defaults; see docs/config.md for details.
 const SLIPSTREAM_ALPN: &str = "picoquic_sample";
 const DNS_MAX_QUERY_SIZE: usize = 512;
 const IDLE_SLEEP_MS: u64 = 10;
+// Default QUIC MTU for server packets; see docs/config.md for details.
 const QUIC_MTU: u32 = 900;
 const STREAM_READ_CHUNK_BYTES: usize = 4096;
 const DEFAULT_TCP_RCVBUF_BYTES: usize = 256 * 1024;
@@ -496,7 +499,7 @@ unsafe extern "C" fn server_callback(
                 stream_id,
             };
             if let Some(stream) = shutdown_stream(state, key) {
-                eprintln!(
+                warn!(
                     "stream {:?}: reset event={} tx_bytes={} rx_bytes={} consumed_offset={} queued={} pending_chunks={} pending_fin={} fin_enqueued={} fin_offset={:?} target_fin_pending={} close_after_flush={}",
                     key.stream_id,
                     reason,
@@ -512,7 +515,7 @@ unsafe extern "C" fn server_callback(
                     stream.close_after_flush
                 );
             } else {
-                eprintln!(
+                warn!(
                     "stream {:?}: reset event={} (unknown stream)",
                     stream_id, reason
                 );
@@ -593,7 +596,7 @@ unsafe extern "C" fn server_callback(
                         picoquic_provide_stream_data_buffer(bytes as *mut _, send_len, 0, 1);
                     if buffer.is_null() {
                         if let Some(stream) = shutdown_stream(state, key) {
-                            eprintln!(
+                            error!(
                                 "stream {:?}: provide_stream_data_buffer returned null send_len={} queued={} pending_chunks={} tx_bytes={}",
                                 key.stream_id,
                                 send_len,
@@ -602,7 +605,7 @@ unsafe extern "C" fn server_callback(
                                 stream.tx_bytes
                             );
                         } else {
-                            eprintln!(
+                            error!(
                                 "stream {:?}: provide_stream_data_buffer returned null send_len={}",
                                 key.stream_id, send_len
                             );
@@ -661,7 +664,7 @@ fn handle_stream_data(
         let stream = state.streams.entry(key).or_insert_with(|| {
             let (shutdown_tx, shutdown_rx) = watch::channel(false);
             if debug_streams {
-                eprintln!("stream {:?}: connecting", key.stream_id);
+                debug!("stream {:?}: connecting", key.stream_id);
             }
             spawn_target_connector(
                 key,
@@ -727,7 +730,7 @@ fn handle_stream_data(
 
     if reset_stream {
         if debug_streams {
-            eprintln!("stream {:?}: resetting", stream_id);
+            debug!("stream {:?}: resetting", stream_id);
         }
         shutdown_stream(state, key);
         unsafe {
@@ -818,7 +821,7 @@ fn spawn_target_connector(
                 });
             }
             Err(err) => {
-                eprintln!(
+                warn!(
                     "stream {:?}: target connect failed err={} kind={:?}",
                     key.stream_id,
                     err,
@@ -856,7 +859,7 @@ fn spawn_target_reader(
                     match read {
                         Ok(0) => {
                             if debug_streams {
-                                eprintln!(
+                                debug!(
                                     "stream {:?}: target eof read_bytes={}",
                                     key.stream_id, total
                                 );
@@ -885,7 +888,7 @@ fn spawn_target_reader(
                         }
                         Err(err) => {
                             if debug_streams {
-                                eprintln!(
+                                debug!(
                                     "stream {:?}: target read error after {} bytes (kind={:?} err={})",
                                     key.stream_id,
                                     total,
@@ -1010,7 +1013,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                     return;
                 };
                 if state.debug_streams {
-                    eprintln!("stream {:?}: target connected", stream_id);
+                    debug!("stream {:?}: target connected", stream_id);
                 }
                 stream.write_tx = Some(write_tx);
                 stream.data_rx = Some(data_rx);
@@ -1018,7 +1021,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                 if let Some(write_tx) = stream.write_tx.as_ref() {
                     while let Some(chunk) = stream.pending_data.pop_front() {
                         if write_tx.send(StreamWrite::Data(chunk)).is_err() {
-                            eprintln!(
+                            warn!(
                                 "stream {:?}: pending write flush failed queued={} pending_chunks={} tx_bytes={}",
                                 stream_id,
                                 stream.queued_bytes,
@@ -1031,7 +1034,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                     }
                     if !reset_stream && stream.pending_fin && !stream.fin_enqueued {
                         if write_tx.send(StreamWrite::Fin).is_err() {
-                            eprintln!(
+                            warn!(
                                 "stream {:?}: pending fin flush failed queued={} pending_chunks={} tx_bytes={}",
                                 stream_id,
                                 stream.queued_bytes,
@@ -1060,7 +1063,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
             };
             if shutdown_stream(state, key).is_some() {
                 let _ = unsafe { picoquic_reset_stream(cnx, stream_id, SLIPSTREAM_INTERNAL_ERROR) };
-                eprintln!("stream {:?}: target connect failed", stream_id);
+                warn!("stream {:?}: target connect failed", stream_id);
             }
         }
         Command::StreamClosed { cnx_id, stream_id } => {
@@ -1072,7 +1075,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                 stream.target_fin_pending = true;
                 stream.close_after_flush = true;
                 if state.debug_streams {
-                    eprintln!(
+                    debug!(
                         "stream {:?}: closed by target tx_bytes={}",
                         stream_id, stream.tx_bytes
                     );
@@ -1085,7 +1088,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                             picoquic_mark_active_stream(cnx, stream_id, 1, std::ptr::null_mut())
                         };
                         if ret != 0 && state.debug_streams {
-                            eprintln!(
+                            debug!(
                                 "stream {:?}: mark_active_stream fin failed ret={}",
                                 stream_id, ret
                             );
@@ -1099,7 +1102,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
             let ret =
                 unsafe { picoquic_mark_active_stream(cnx, stream_id, 1, std::ptr::null_mut()) };
             if ret != 0 && state.debug_streams {
-                eprintln!(
+                debug!(
                     "stream {:?}: mark_active_stream readable failed ret={}",
                     stream_id, ret
                 );
@@ -1112,7 +1115,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                 stream_id,
             };
             if let Some(stream) = shutdown_stream(state, key) {
-                eprintln!(
+                warn!(
                     "stream {:?}: target read error tx_bytes={} rx_bytes={} consumed_offset={} queued={} fin_offset={:?}",
                     stream_id,
                     stream.tx_bytes,
@@ -1131,7 +1134,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                 stream_id,
             };
             if let Some(stream) = shutdown_stream(state, key) {
-                eprintln!(
+                warn!(
                     "stream {:?}: target write failed tx_bytes={} rx_bytes={} consumed_offset={} queued={} fin_offset={:?}",
                     stream_id,
                     stream.tx_bytes,
@@ -1169,7 +1172,7 @@ fn handle_command(state_ptr: *mut ServerState, command: Command) {
                     )
                 };
                 if ret < 0 {
-                    eprintln!(
+                    warn!(
                         "stream {:?}: stream_data_consumed failed ret={} consumed_offset={}",
                         stream_id, ret, stream.consumed_offset
                     );
@@ -1201,7 +1204,7 @@ fn maybe_report_command_stats(state_ptr: *mut ServerState) {
     }
     let total = state.command_counts.total();
     if total > 0 {
-        eprintln!(
+        debug!(
             "debug: commands total={} connected={} connect_err={} closed={} readable={} read_err={} write_err={} write_drained={}",
             total,
             state.command_counts.stream_connected,

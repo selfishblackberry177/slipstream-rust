@@ -28,6 +28,7 @@ impl QuicGuard {
 impl Drop for QuicGuard {
     fn drop(&mut self) {
         if !self.quic.is_null() {
+            // SAFETY: QuicGuard owns the quic pointer returned by picoquic_create.
             unsafe { picoquic_free(self.quic) };
         }
     }
@@ -56,6 +57,9 @@ pub unsafe fn configure_quic_with_custom(
 /// Configure shared QUIC defaults.
 /// Backpressure is enforced via a connection-level `max_data` cap (shared across streams),
 /// rather than per-stream buffer limits/reset.
+///
+/// # Safety
+/// `quic` must be a valid picoquic context and `mtu` must be non-zero.
 unsafe fn configure_quic_common(quic: *mut picoquic_quic_t, mtu: u32) {
     picoquic_set_cookie_mode(quic, 0);
     picoquic_set_default_priority(quic, 2);
@@ -72,6 +76,7 @@ unsafe fn configure_quic_common(quic: *mut picoquic_quic_t, mtu: u32) {
 pub fn socket_addr_to_storage(addr: SocketAddr) -> sockaddr_storage {
     match addr {
         SocketAddr::V4(addr) => {
+            // SAFETY: sockaddr_storage is plain-old-data; zeroing is valid.
             let mut storage: sockaddr_storage = unsafe { std::mem::zeroed() };
             let sockaddr = libc::sockaddr_in {
                 sin_family: libc::AF_INET as libc::sa_family_t,
@@ -81,12 +86,14 @@ pub fn socket_addr_to_storage(addr: SocketAddr) -> sockaddr_storage {
                 },
                 sin_zero: [0; 8],
             };
+            // SAFETY: storage is properly aligned and large enough for sockaddr_in.
             unsafe {
                 std::ptr::write(&mut storage as *mut _ as *mut libc::sockaddr_in, sockaddr);
             }
             storage
         }
         SocketAddr::V6(addr) => {
+            // SAFETY: sockaddr_storage is plain-old-data; zeroing is valid.
             let mut storage: sockaddr_storage = unsafe { std::mem::zeroed() };
             let sockaddr = libc::sockaddr_in6 {
                 sin6_family: libc::AF_INET6 as libc::sa_family_t,
@@ -97,6 +104,7 @@ pub fn socket_addr_to_storage(addr: SocketAddr) -> sockaddr_storage {
                 },
                 sin6_scope_id: addr.scope_id(),
             };
+            // SAFETY: storage is properly aligned and large enough for sockaddr_in6.
             unsafe {
                 std::ptr::write(&mut storage as *mut _ as *mut libc::sockaddr_in6, sockaddr);
             }
@@ -108,6 +116,7 @@ pub fn socket_addr_to_storage(addr: SocketAddr) -> sockaddr_storage {
 pub fn sockaddr_storage_to_socket_addr(storage: &sockaddr_storage) -> Result<SocketAddr, String> {
     match storage.ss_family as libc::c_int {
         libc::AF_INET => {
+            // SAFETY: ss_family identifies an IPv4 sockaddr layout.
             let addr_in: &libc::sockaddr_in =
                 unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
             let ip = Ipv4Addr::from(addr_in.sin_addr.s_addr);
@@ -115,6 +124,7 @@ pub fn sockaddr_storage_to_socket_addr(storage: &sockaddr_storage) -> Result<Soc
             Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))
         }
         libc::AF_INET6 => {
+            // SAFETY: ss_family identifies an IPv6 sockaddr layout.
             let addr_in6: &libc::sockaddr_in6 =
                 unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
             let ip = Ipv6Addr::from(addr_in6.sin6_addr.s6_addr);
@@ -144,7 +154,8 @@ pub unsafe fn write_stream_or_reset(
         } else {
             SLIPSTREAM_INTERNAL_ERROR
         };
-        let _ = picoquic_reset_stream(cnx, stream_id, code);
+        // SAFETY: caller guarantees cnx is a valid picoquic connection.
+        let _ = unsafe { picoquic_reset_stream(cnx, stream_id, code) };
         let _ = stream.shutdown(Shutdown::Both);
         return true;
     }
