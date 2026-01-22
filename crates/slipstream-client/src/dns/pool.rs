@@ -7,7 +7,6 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RECV_BUF: usize = 4096;
 
@@ -66,14 +65,12 @@ impl DnsQueryPool {
     ) {
         // Create ephemeral socket - OS assigns random source port
         let socket = match bind_udp_socket().await {
-
             Ok(s) => s,
             Err(e) => {
                 debug!("Failed to bind ephemeral socket: {}", e);
                 return;
             }
         };
-
 
         if let Err(e) = socket.send_to(&request.packet, request.dest).await {
             debug!("Failed to send query: {}", e);
@@ -137,8 +134,6 @@ impl DnsTransport {
                 }
             };
 
-            
-
             let local_addr = socket
                 .local_addr()
                 .map_err(|e| ClientError::new(e.to_string()))?;
@@ -172,5 +167,54 @@ impl DnsTransport {
             } => Some(*local_addr_storage),
             DnsTransport::Pool(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tokio::net::UdpSocket;
+
+    #[tokio::test]
+    async fn test_random_source_ports() {
+        let server_socket = UdpSocket::bind("[::1]:0").await.unwrap();
+        let server_addr = server_socket.local_addr().unwrap();
+        println!("Mock server listening on {}", server_addr);
+
+        let workers = 4;
+        let pool = DnsQueryPool::new(workers);
+        let num_queries = 20;
+
+        for i in 0..num_queries {
+            let packet = vec![i as u8; 10];
+            pool.send(packet, server_addr).await.unwrap();
+        }
+        println!("Sent {} queries to pool", num_queries);
+
+        let mut source_ports = HashSet::new();
+        let mut buf = [0u8; 1024];
+
+        for _ in 0..num_queries {
+            let (_, peer) =
+                tokio::time::timeout(Duration::from_secs(5), server_socket.recv_from(&mut buf))
+                    .await
+                    .expect("Timeout waiting for packet")
+                    .expect("Failed to receive packet");
+            source_ports.insert(peer.port());
+            // Send response back to satisfy the worker
+            let _ = server_socket.send_to(b"ok", peer).await;
+        }
+
+        assert!(
+            source_ports.len() > 1,
+            "Expected multiple source ports, got {}",
+            source_ports.len()
+        );
+        println!(
+            "Used {} unique source ports for {} queries",
+            source_ports.len(),
+            num_queries
+        );
     }
 }

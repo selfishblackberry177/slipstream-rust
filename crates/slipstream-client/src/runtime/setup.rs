@@ -25,7 +25,6 @@ pub(crate) async fn bind_udp_socket() -> Result<TokioUdpSocket, ClientError> {
     bind_udp_socket_addr(bind_addr)
 }
 
-
 pub(crate) async fn bind_tcp_listener(
     host: &str,
     port: u16,
@@ -99,4 +98,3 @@ fn bind_udp_socket_addr(addr: SocketAddr) -> Result<TokioUdpSocket, ClientError>
 pub(crate) fn map_io(err: std::io::Error) -> ClientError {
     ClientError::new(err.to_string())
 }
-

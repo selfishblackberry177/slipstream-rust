@@ -1,7 +1,6 @@
 mod path;
 pub(crate) mod setup;
 
-
 use self::path::{
     apply_path_mode, drain_path_events, fetch_path_quality, find_resolver_by_addr_mut,
     loop_burst_total, path_poll_burst_max,
