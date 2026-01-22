@@ -455,13 +455,8 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
                     local_addr_storage = addr_from;
                 }
                 if let Err(err) = transport.send(&packet, dest).await {
-                    // Transport errors are already ClientError, check the message
-                    let msg = err.to_string();
-                    if !msg.contains("Connection refused")
-                        && !msg.contains("Network unreachable")
-                        && !msg.contains("No route to host")
-                    {
-                        return Err(err);
+                    if !is_transient_udp_error(&err) {
+                        return Err(map_io(err));
                     }
                 }
             }

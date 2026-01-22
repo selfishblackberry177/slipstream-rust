@@ -1,4 +1,6 @@
 use crate::error::ClientError;
+use crate::runtime::setup::map_io;
+use slipstream_core::net::is_transient_udp_error;
 use slipstream_dns::{build_qname, encode_query, QueryParams, CLASS_IN, RR_TXT};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_prepare_packet_ex, slipstream_request_poll,
@@ -105,12 +107,12 @@ pub(crate) async fn send_poll_queries(
         let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
         let dest = normalize_dual_stack_addr(dest);
         if let Err(err) = transport.send(&packet, dest).await {
-            if is_transient_udp_error_from_client_error(&err) {
+            if is_transient_udp_error(&err) {
                 remaining_count = remaining_count.saturating_add(1);
                 *remaining = remaining_count;
                 break;
             }
-            return Err(err);
+            return Err(map_io(err));
         }
         if resolver.mode == ResolverMode::Authoritative {
             resolver.inflight_poll_ids.insert(poll_id, current_time);
@@ -118,13 +120,4 @@ pub(crate) async fn send_poll_queries(
     }
 
     Ok(())
-}
-
-fn is_transient_udp_error_from_client_error(err: &ClientError) -> bool {
-    // Check if the error message indicates a transient UDP error
-    let msg = err.to_string();
-    msg.contains("Connection refused")
-        || msg.contains("Network unreachable")
-        || msg.contains("No route to host")
-        || msg.contains("would block")
 }

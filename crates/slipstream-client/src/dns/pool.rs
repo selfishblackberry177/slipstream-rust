@@ -1,7 +1,6 @@
 use crate::error::ClientError;
 use crate::runtime::setup::bind_udp_socket;
 use std::net::SocketAddr;
-
 use std::time::Duration;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tokio::sync::mpsc;
@@ -98,12 +97,12 @@ impl DnsQueryPool {
     }
 
     /// Send a DNS query through the pool.
-    pub(crate) async fn send(&self, packet: Vec<u8>, dest: SocketAddr) -> Result<(), ClientError> {
+    pub(crate) async fn send(&self, packet: Vec<u8>, dest: SocketAddr) -> std::io::Result<()> {
         let request = QueryRequest { packet, dest };
         self.request_tx
             .send(request)
             .await
-            .map_err(|_| ClientError::new("DNS query pool channel closed".to_string()))
+            .map_err(|_| std::io::Error::other("DNS query pool channel closed"))
     }
 
     /// Get mutable reference to the response receiver for tokio::select!
@@ -147,13 +146,10 @@ impl DnsTransport {
         }
     }
 
-    pub(crate) async fn send(&self, packet: &[u8], dest: SocketAddr) -> Result<(), ClientError> {
+    pub(crate) async fn send(&self, packet: &[u8], dest: SocketAddr) -> std::io::Result<()> {
         match self {
             DnsTransport::Shared { socket, .. } => {
-                socket
-                    .send_to(packet, dest)
-                    .await
-                    .map_err(|e| ClientError::new(e.to_string()))?;
+                socket.send_to(packet, dest).await?;
                 Ok(())
             }
             DnsTransport::Pool(pool) => pool.send(packet.to_vec(), dest).await,
