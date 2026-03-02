@@ -58,6 +58,8 @@ struct Args {
     debug_poll: bool,
     #[arg(long = "debug-streams")]
     debug_streams: bool,
+    #[arg(long = "random-src-port", default_value_t = 1)]
+    random_src_port: u16,
 }
 
 fn main() {
@@ -182,6 +184,7 @@ fn main() {
         keep_alive_interval: keep_alive_interval as usize,
         debug_poll: args.debug_poll,
         debug_streams: args.debug_streams,
+        random_src_port: args.random_src_port,
     };
 
     let runtime = Builder::new_current_thread()

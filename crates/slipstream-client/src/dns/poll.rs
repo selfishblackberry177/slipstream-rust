@@ -6,10 +6,10 @@ use slipstream_ffi::picoquic::{
 };
 use slipstream_ffi::{ClientConfig, ResolverMode};
 use std::collections::HashMap;
-use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::path::refresh_resolver_path;
 use super::resolver::{sockaddr_storage_to_socket_addr, ResolverState};
+use super::transport::DnsTransport;
 use slipstream_core::normalize_dual_stack_addr;
 
 const AUTHORITATIVE_POLL_TIMEOUT_US: u64 = 5_000_000;
@@ -33,7 +33,7 @@ pub(crate) fn expire_inflight_polls(inflight_poll_ids: &mut HashMap<u16, u64>, n
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_poll_queries(
     cnx: *mut picoquic_cnx_t,
-    udp: &TokioUdpSocket,
+    transport: &DnsTransport,
     config: &ClientConfig<'_>,
     local_addr_storage: &mut libc::sockaddr_storage,
     dns_id: &mut u16,
@@ -104,7 +104,7 @@ pub(crate) async fn send_poll_queries(
 
         let dest = sockaddr_storage_to_socket_addr(&addr_to)?;
         let dest = normalize_dual_stack_addr(dest);
-        if let Err(err) = udp.send_to(&packet, dest).await {
+        if let Err(err) = transport.send_to(&packet, dest).await {
             if is_transient_udp_error(&err) {
                 remaining_count = remaining_count.saturating_add(1);
                 *remaining = remaining_count;
